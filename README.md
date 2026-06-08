@@ -1,1 +1,1 @@
-# Payflow -- A payment gateway system
+# Payflow -- Wallet and Transactions REST API
