@@ -15,4 +15,4 @@ class Wallet(Base):
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    user: Mapped["User"] = relationship(back_populates="wallet")
+    user: Mapped["user"] = relationship(back_populates="wallet")
