@@ -1,8 +1,16 @@
+from __future__ import annotations
+
 import uuid
+from typing import TYPE_CHECKING
+
 from sqlalchemy import String, Boolean, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.wallet import Wallet
+
 
 class User(Base):
     __tablename__ = "users"
@@ -15,4 +23,4 @@ class User(Base):
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    wallet: Mapped["wallet"] = relationship(back_populates="user", uselist=False)
+    wallet: Mapped[Wallet] = relationship(back_populates="user", uselist=False)
