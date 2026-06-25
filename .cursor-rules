@@ -1,0 +1,119 @@
+# Project: PayFlow
+# Purpose: Digital wallet backend API — deposit, withdraw, transfer between users with idempotency, state machine, and async fraud flagging
+
+# = LANGUAGE & FRAMEWORK =
+- Language: Python 3.11+
+- Framework: FastAPI (async only — never use sync def for route handlers)
+- ORM: SQLAlchemy 2.x async (AsyncSession, async with session.begin())
+- Validation: Pydantic v2 (BaseModel, model_config, not Config class)
+- Auth: JWT via python-jose, passwords via passlib + bcrypt
+- Cache: Redis via redis.asyncio (never sync redis client)
+- Background jobs: Celery with Redis broker
+- Migrations: Alembic (sync engine for migrations, async engine for app runtime)
+
+# = FOLDER STRUCTURE =
+app/
+  api/v1/routes/     → Route handlers only — thin, no business logic
+  core/              → config.py, database.py, redis.py, dependencies.py, exceptions.py
+  models/            → SQLAlchemy ORM models (one file per table)
+  schemas/           → Pydantic request/response schemas (one file per domain)
+  services/          → All business logic lives here (auth.py, wallet.py, idempotency.py)
+  workers/           → celery_app.py, tasks.py
+alembic/             → Migration scripts — never edit versions/ manually
+tests/               → conftest.py, test_auth.py, test_wallet.py, test_transactions.py
+
+# = CODE STANDARDS =
+- File naming: snake_case for everything (no PascalCase files)
+- Route handlers: async def always, never def
+- Services: all DB mutations go here, not in routes
+- Never import models directly in routes — go through services
+- Never raise HTTPException from services — raise custom exceptions from app/core/exceptions.py
+- Never use bare except — always catch specific exceptions
+- Comments: explain why, not what — especially on lock ordering and state transitions
+
+# = DATABASE =
+- Money columns: always NUMERIC(18, 4) — never Float, never Decimal without precision
+- UUIDs: use uuid.uuid4() as default for all primary keys, UUID(as_uuid=True) in SQLAlchemy
+- Timestamps: always DateTime(timezone=True) with server_default=func.now()
+- All mutations: wrap related inserts/updates in a single async with session.begin() block
+- Flush before commit when you need a generated ID mid-transaction (e.g. user.id before wallet creation)
+- Never call session.commit() inside a service — let the route or context manager handle it
+- Lock ordering on transfers: always lock lower UUID wallet first to prevent deadlocks
+
+# = AUTHENTICATION =
+- Every protected route: current_user: User = Depends(get_current_user)
+- get_current_user lives in app/core/dependencies.py — never inline token logic in routes
+- JWT payload key for user identity: "sub" (stores str(user.id))
+- Token type: Bearer, sent in Authorization header
+- Login endpoint uses OAuth2PasswordRequestForm — username field accepts email, sent as form-data not JSON
+- Never log or return hashed_password in any response
+
+# = WALLET MUTATIONS (deposit, withdraw, transfer) =
+- All three require Idempotency-Key header
+- Check Redis first before any DB operation
+- Transaction status flow: PENDING → SUCCESS or PENDING → FAILED — no other transitions allowed
+- On failure: set status = FAILED, write failure_reason, do not update balance
+- After SUCCESS: fire flag_suspicious_transaction.delay(transaction_id) — never await Celery tasks
+
+# = IDEMPOTENCY =
+- Check Redis on every wallet mutation before touching DB
+- On cache hit: return stored response_snapshot immediately, skip all DB writes
+- On cache miss: process normally, then write to Redis (TTL 86400) AND Postgres idempotency_keys table
+- Redis is fast lookup, Postgres is permanent record
+
+# = ERROR HANDLING =
+- Custom exceptions in app/core/exceptions.py: InsufficientFundsError, WalletLockedError, DuplicateTransactionError
+- Global handler in main.py maps all custom exceptions to: {"error": {"code": "SNAKE_CASE_CODE", "message": "Human readable"}}
+- HTTP status codes: 201 creates, 200 reads, 422 validation/business logic failures, 423 wallet locked, 401 auth, 404 not found, 409 conflict (duplicate email)
+- Never return a raw Python exception message to the client
+
+# = PYDANTIC SCHEMAS =
+- amount field: must be > 0 and <= 100000, use Field(gt=0, le=100000)
+- to_user_email on transfer: must not equal current user email (validate in schema or service)
+- response schemas: always set model_config = ConfigDict(from_attributes=True)
+- Never include hashed_password in any response schema
+
+# = CELERY =
+- Celery app defined in app/workers/celery_app.py
+- Single task: flag_suspicious_transaction(transaction_id) in app/workers/tasks.py
+- Suspicious conditions: amount > 10000 OR 5+ transactions from same wallet in last 10 minutes
+- After task runs: write result to celery_task_logs (status = OK or FLAGGED, result = reason string)
+- Always store AsyncResult task ID in celery_task_logs.celery_task_id
+- Run worker separately: celery -A app.workers.celery_app worker --loglevel=info
+
+# = API INTEGRATION PATTERN =
+- Base URL: from app/core/config.py Settings (reads from .env via pydantic-settings)
+- All env vars come from .env — never hardcode URLs, passwords, or secret keys
+- Auth header: Authorization: Bearer <token>
+- Error response shape: {"error": {"code": "...", "message": "..."}}
+- Always handle 401 (token expired/invalid) and 422 (business logic failure) explicitly
+
+# = TESTING =
+- Framework: pytest + httpx AsyncClient
+- Test DB: separate payflow_test database — override get_db in conftest.py
+- Never use production DB for tests
+- Auth fixture: helper that registers and logs in a user, returns headers dict
+- Mock Celery: use unittest.mock.patch on .delay() — never fire real tasks in tests
+- Test file per domain: test_auth.py, test_wallet.py, test_transactions.py
+
+# = GIT CONVENTIONS =
+- Commit after every self-contained working unit — not after sessions, after features
+- Commit message format: type: short description
+- Types: feat (new feature), fix (bug fix), refactor (no behavior change), test (tests), chore (config/tooling), docs (README, Postman, comments)
+- Examples:
+    feat: deposit endpoint with atomic balance update and idempotency
+    fix: wallet lock ordering to prevent transfer deadlock
+    test: idempotency key returns cached response on duplicate request
+    chore: wire Redis connection into FastAPI lifespan
+
+# = WHAT TO AVOID =
+- No sync def route handlers — always async def
+- No Float for money — always NUMERIC(18, 4)
+- No raw HTTPException raised from services — use custom exceptions
+- No session.commit() inside services — let context managers handle it
+- No hardcoded secrets, URLs, or credentials anywhere in code
+- No console.log equivalent — use Python logging module, not print()
+- No bare except blocks
+- No commented-out code — delete it or use git history
+- No direct session usage in routes — always go through service functions
+- Never await Celery .delay() calls — fire and forget only
