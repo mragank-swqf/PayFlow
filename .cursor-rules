@@ -1,5 +1,5 @@
 # Project: PayFlow
-# Purpose: Digital wallet backend API — deposit, withdraw, transfer between users with idempotency, state machine, and async fraud flagging
+# Purpose: Payments and Wallets Service — deposit, withdraw, transfer between users with idempotency, state machine, and async fraud flagging
 
 # = LANGUAGE & FRAMEWORK =
 - Language: Python 3.11+
