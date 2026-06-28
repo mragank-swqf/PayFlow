@@ -7,6 +7,11 @@ from app.core.database import get_db
 from app.models.user import User
 from app.services.auth import decode_access_token
 
+import json
+import uuid
+from fastapi import Header
+from app.services.idempotency import IdempotencyContext, check_idempotency_key
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 async def get_current_user(
@@ -33,3 +38,23 @@ async def get_current_user(
         raise credentials_exception
 
     return user
+
+async def require_idempotency_key(
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+) -> IdempotencyContext:
+    try:
+        uuid.UUID(idempotency_key, version=4)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Idempotency-Key must be a valid UUID v4",
+        )
+
+    cached = await check_idempotency_key(idempotency_key)
+    if cached is not None:
+        return IdempotencyContext(
+            key=idempotency_key,
+            cached_response=json.loads(cached),
+        )
+
+    return IdempotencyContext(key=idempotency_key)
