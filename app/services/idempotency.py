@@ -2,10 +2,9 @@ from app.core.redis import get_redis
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
-
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.idempotency import IdempotencyKey
+from dataclasses import dataclass
 
 IDEMPOTENCY_KEY_PREFIX = "idempotency:"
 
@@ -35,3 +34,12 @@ async def store_idempotency_key(
         expires_at=expires_at,
     )
     db.add(record)
+
+@dataclass
+class IdempotencyContext:
+    key: str
+    cached_response: dict | None = None
+
+    @property
+    def is_duplicate(self) -> bool:
+        return self.cached_response is not None
