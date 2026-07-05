@@ -123,9 +123,13 @@ async def withdraw(
 @router.post("/transfer", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)
 async def transfer(
     payload: TransferRequest,
+    idem: IdempotencyContext = Depends(require_idempotency_key),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if idem.is_duplicate:
+        return idem.cached_response
+
     sender_result = await db.execute(select(Wallet).where(Wallet.user_id == current_user.id))
     sender_wallet = sender_result.scalar_one_or_none()
     if not sender_wallet:
@@ -138,6 +142,7 @@ async def transfer(
             currency=sender_wallet.currency,
             type="TRANSFER",
             status="PENDING",
+            idempotency_key=idem.key,
         )
         db.add(transaction)
         await db.flush()
@@ -160,6 +165,7 @@ async def transfer(
             currency=sender_wallet.currency,
             type="TRANSFER",
             status="PENDING",
+            idempotency_key=idem.key,
         )
         db.add(transaction)
         await db.flush()
@@ -179,6 +185,7 @@ async def transfer(
             currency=sender_wallet.currency,
             type="TRANSFER",
             status="PENDING",
+            idempotency_key=idem.key,
         )
         db.add(transaction)
         await db.flush()
@@ -201,6 +208,7 @@ async def transfer(
         currency=sender_wallet.currency,
         type="TRANSFER",
         status="PENDING",
+        idempotency_key=idem.key,
     )
     db.add(transaction)
     await db.flush()
@@ -217,6 +225,14 @@ async def transfer(
     sender_wallet.balance -= payload.amount
     receiver_wallet.balance += payload.amount
     transaction.status = TransactionStateMachine.transition(transaction.status, "SUCCESS")
+
+    response = TransactionOut.model_validate(transaction)
+    await store_idempotency_key(
+        idem.key,
+        response.model_dump(mode="json"),
+        db,
+        transaction_id=transaction.id,
+    )
 
     await db.commit()
     await db.refresh(transaction)
