@@ -11,6 +11,7 @@ from app.models.transaction import Transaction
 from app.schemas.transaction import DepositRequest, TransactionOut, TransferRequest, WithdrawRequest
 from app.services.idempotency import IdempotencyContext, store_idempotency_key
 from app.services.state_machine import TransactionStateMachine
+from app.services.wallet import lock_wallets_in_order
 
 
 router = APIRouter(prefix="/wallet", tags=["wallet"])
@@ -143,6 +144,10 @@ async def transfer(
     receiver_wallet = receiver_wallet_result.scalar_one_or_none()
     if not receiver_wallet:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receiver wallet not found")
+
+    sender_wallet, receiver_wallet = await lock_wallets_in_order(
+        db, sender_wallet.id, receiver_wallet.id
+    )
 
     transaction = Transaction(
         sender_wallet_id=sender_wallet.id,
