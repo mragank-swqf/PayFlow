@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 
 
 class DepositRequest(BaseModel):
@@ -25,3 +25,7 @@ class TransactionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+class TransferRequest(BaseModel):
+    amount: float = Field(gt=0, le=100000)
+    to_user_email: EmailStr

@@ -8,8 +8,10 @@ from app.models.user import User
 from app.models.wallet import Wallet
 from app.schemas.wallet import WalletOut
 from app.models.transaction import Transaction
-from app.schemas.transaction import DepositRequest, TransactionOut, WithdrawRequest
+from app.schemas.transaction import DepositRequest, TransactionOut, TransferRequest, WithdrawRequest
 from app.services.idempotency import IdempotencyContext, store_idempotency_key
+from app.services.state_machine import TransactionStateMachine
+
 
 router = APIRouter(prefix="/wallet", tags=["wallet"])
 
@@ -112,6 +114,50 @@ async def withdraw(
         db,
         transaction_id=transaction.id,
     )
+
+    await db.commit()
+    await db.refresh(transaction)
+    return transaction
+
+@router.post("/transfer", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)
+async def transfer(
+    payload: TransferRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    sender_result = await db.execute(select(Wallet).where(Wallet.user_id == current_user.id))
+    sender_wallet = sender_result.scalar_one_or_none()
+    if not sender_wallet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found")
+
+    receiver_result = await db.execute(
+        select(User).where(User.email == payload.to_user_email)
+    )
+    receiver_user = receiver_result.scalar_one_or_none()
+    if not receiver_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receiver not found")
+
+    receiver_wallet_result = await db.execute(
+        select(Wallet).where(Wallet.user_id == receiver_user.id)
+    )
+    receiver_wallet = receiver_wallet_result.scalar_one_or_none()
+    if not receiver_wallet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receiver wallet not found")
+
+    transaction = Transaction(
+        sender_wallet_id=sender_wallet.id,
+        receiver_wallet_id=receiver_wallet.id,
+        amount=payload.amount,
+        currency=sender_wallet.currency,
+        type="TRANSFER",
+        status="PENDING",
+    )
+    db.add(transaction)
+    await db.flush()
+
+    sender_wallet.balance -= payload.amount
+    receiver_wallet.balance += payload.amount
+    transaction.status = TransactionStateMachine.transition(transaction.status, "SUCCESS")
 
     await db.commit()
     await db.refresh(transaction)
