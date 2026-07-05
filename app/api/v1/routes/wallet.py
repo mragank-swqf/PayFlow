@@ -131,11 +131,41 @@ async def transfer(
     if not sender_wallet:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found")
 
+    if payload.to_user_email == current_user.email:
+        transaction = Transaction(
+            sender_wallet_id=sender_wallet.id,
+            amount=payload.amount,
+            currency=sender_wallet.currency,
+            type="TRANSFER",
+            status="PENDING",
+        )
+        db.add(transaction)
+        await db.flush()
+        transaction.status = TransactionStateMachine.transition(transaction.status, "FAILED")
+        transaction.failure_reason = "Cannot transfer to yourself"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot transfer to yourself",
+        )
+
     receiver_result = await db.execute(
         select(User).where(User.email == payload.to_user_email)
     )
     receiver_user = receiver_result.scalar_one_or_none()
     if not receiver_user:
+        transaction = Transaction(
+            sender_wallet_id=sender_wallet.id,
+            amount=payload.amount,
+            currency=sender_wallet.currency,
+            type="TRANSFER",
+            status="PENDING",
+        )
+        db.add(transaction)
+        await db.flush()
+        transaction.status = TransactionStateMachine.transition(transaction.status, "FAILED")
+        transaction.failure_reason = "Receiver not found"
+        await db.commit()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receiver not found")
 
     receiver_wallet_result = await db.execute(
@@ -143,7 +173,22 @@ async def transfer(
     )
     receiver_wallet = receiver_wallet_result.scalar_one_or_none()
     if not receiver_wallet:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receiver wallet not found")
+        transaction = Transaction(
+            sender_wallet_id=sender_wallet.id,
+            amount=payload.amount,
+            currency=sender_wallet.currency,
+            type="TRANSFER",
+            status="PENDING",
+        )
+        db.add(transaction)
+        await db.flush()
+        transaction.status = TransactionStateMachine.transition(transaction.status, "FAILED")
+        transaction.failure_reason = "Receiver wallet not found"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Receiver wallet not found",
+        )
 
     sender_wallet, receiver_wallet = await lock_wallets_in_order(
         db, sender_wallet.id, receiver_wallet.id
@@ -159,6 +204,15 @@ async def transfer(
     )
     db.add(transaction)
     await db.flush()
+
+    if sender_wallet.balance < payload.amount:
+        transaction.status = TransactionStateMachine.transition(transaction.status, "FAILED")
+        transaction.failure_reason = "Insufficient funds"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Insufficient funds",
+        )
 
     sender_wallet.balance -= payload.amount
     receiver_wallet.balance += payload.amount
