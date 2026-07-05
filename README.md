@@ -1,1 +1,1 @@
-# Payflow -- Wallet and Transactions REST API
+# Payflow -- Payments and Wallets Service
