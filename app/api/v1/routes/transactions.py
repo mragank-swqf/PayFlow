@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -7,12 +7,12 @@ from app.core.dependencies import get_current_user
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.models.wallet import Wallet
-from app.schemas.transaction import TransactionOut
+from app.schemas.transaction import TransactionListResponse
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 
-@router.get("", response_model=list[TransactionOut])
+@router.get("", response_model=TransactionListResponse)
 async def list_transactions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -26,16 +26,28 @@ async def list_transactions(
 
     offset = (page - 1) * page_size
 
+    wallet_filter = or_(
+        Transaction.sender_wallet_id == wallet.id,
+        Transaction.receiver_wallet_id == wallet.id,
+    )
+
+    count_result = await db.execute(
+        select(func.count()).select_from(Transaction).where(wallet_filter)
+    )
+    total = count_result.scalar_one()
+
     result = await db.execute(
         select(Transaction)
-        .where(
-            or_(
-                Transaction.sender_wallet_id == wallet.id,
-                Transaction.receiver_wallet_id == wallet.id,
-            )
-        )
+        .where(wallet_filter)
         .order_by(Transaction.created_at.desc())
         .offset(offset)
         .limit(page_size)
     )
-    return result.scalars().all()
+    transactions = result.scalars().all()
+
+    return TransactionListResponse(
+        data=transactions,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )

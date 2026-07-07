@@ -29,3 +29,9 @@ class TransactionOut(BaseModel):
 class TransferRequest(BaseModel):
     amount: float = Field(gt=0, le=100000)
     to_user_email: EmailStr
+
+class TransactionListResponse(BaseModel):
+    data: list[TransactionOut]
+    total: int
+    page: int
+    page_size: int
