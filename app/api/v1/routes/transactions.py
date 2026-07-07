@@ -7,7 +7,8 @@ from app.core.dependencies import get_current_user
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.models.wallet import Wallet
-from app.schemas.transaction import TransactionListResponse
+from app.schemas.transaction import TransactionListResponse, TransactionOut
+import uuid
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -51,3 +52,29 @@ async def list_transactions(
         page=page,
         page_size=page_size,
     )
+
+@router.get("/{transaction_id}", response_model=TransactionOut)
+async def get_transaction(
+    transaction_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    wallet_result = await db.execute(select(Wallet).where(Wallet.user_id == current_user.id))
+    wallet = wallet_result.scalar_one_or_none()
+    if not wallet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found")
+
+    result = await db.execute(
+        select(Transaction).where(
+            Transaction.id == transaction_id,
+            or_(
+                Transaction.sender_wallet_id == wallet.id,
+                Transaction.receiver_wallet_id == wallet.id,
+            ),
+        )
+    )
+    transaction = result.scalar_one_or_none()
+    if not transaction:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+
+    return transaction
