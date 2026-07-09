@@ -12,6 +12,8 @@ from app.schemas.transaction import DepositRequest, TransactionOut, TransferRequ
 from app.services.idempotency import IdempotencyContext, store_idempotency_key
 from app.services.state_machine import TransactionStateMachine
 from app.services.wallet import lock_wallets_in_order
+from app.workers.tasks import flag_suspicious_transaction
+from app.workers.tasks import flag_suspicious_transaction
 
 
 router = APIRouter(prefix="/wallet", tags=["wallet"])
@@ -68,6 +70,7 @@ async def deposit(
 
     await db.commit()
     await db.refresh(transaction)
+    flag_suspicious_transaction.delay(str(transaction.id))
     return transaction
 
 @router.post("/withdraw", response_model=TransactionOut, status_code=status.HTTP_201_CREATED)
@@ -236,4 +239,5 @@ async def transfer(
 
     await db.commit()
     await db.refresh(transaction)
+    flag_suspicious_transaction.delay(str(transaction.id))
     return transaction
