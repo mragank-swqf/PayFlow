@@ -1,9 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, require_idempotency_key
+from app.core.exceptions import (
+    InsufficientFundsError,
+    ReceiverNotFoundError,
+    SelfTransferError,
+    WalletLockedError,
+    WalletNotFoundError,
+)
 from app.models.user import User
 from app.models.wallet import Wallet
 from app.schemas.wallet import WalletOut
@@ -12,7 +19,6 @@ from app.schemas.transaction import DepositRequest, TransactionOut, TransferRequ
 from app.services.idempotency import IdempotencyContext, store_idempotency_key
 from app.services.state_machine import TransactionStateMachine
 from app.services.wallet import lock_wallets_in_order
-from app.workers.tasks import flag_suspicious_transaction
 from app.workers.tasks import flag_suspicious_transaction
 
 
@@ -27,7 +33,7 @@ async def get_balance(
     wallet = result.scalar_one_or_none()
 
     if not wallet:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found")
+        raise WalletNotFoundError()
 
     return wallet
 
@@ -44,7 +50,7 @@ async def deposit(
     result = await db.execute(select(Wallet).where(Wallet.user_id == current_user.id))
     wallet = result.scalar_one_or_none()
     if not wallet:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found")
+        raise WalletNotFoundError()
 
     transaction = Transaction(
         receiver_wallet_id=wallet.id,
@@ -86,10 +92,10 @@ async def withdraw(
     result = await db.execute(select(Wallet).where(Wallet.user_id == current_user.id))
     wallet = result.scalar_one_or_none()
     if not wallet:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found")
+        raise WalletNotFoundError()
 
     if wallet.is_locked:
-        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="Wallet is locked")
+        raise WalletLockedError()
 
     transaction = Transaction(
         sender_wallet_id=wallet.id,
@@ -106,7 +112,7 @@ async def withdraw(
         transaction.status = "FAILED"
         transaction.failure_reason = "Insufficient funds"
         await db.commit()
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Insufficient funds")
+        raise InsufficientFundsError()
 
     wallet.balance -= payload.amount
     transaction.status = "SUCCESS"
@@ -136,7 +142,7 @@ async def transfer(
     sender_result = await db.execute(select(Wallet).where(Wallet.user_id == current_user.id))
     sender_wallet = sender_result.scalar_one_or_none()
     if not sender_wallet:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found")
+        raise WalletNotFoundError()
 
     if payload.to_user_email == current_user.email:
         transaction = Transaction(
@@ -152,10 +158,7 @@ async def transfer(
         transaction.status = TransactionStateMachine.transition(transaction.status, "FAILED")
         transaction.failure_reason = "Cannot transfer to yourself"
         await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Cannot transfer to yourself",
-        )
+        raise SelfTransferError()
 
     receiver_result = await db.execute(
         select(User).where(User.email == payload.to_user_email)
@@ -175,7 +178,7 @@ async def transfer(
         transaction.status = TransactionStateMachine.transition(transaction.status, "FAILED")
         transaction.failure_reason = "Receiver not found"
         await db.commit()
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receiver not found")
+        raise ReceiverNotFoundError()
 
     receiver_wallet_result = await db.execute(
         select(Wallet).where(Wallet.user_id == receiver_user.id)
@@ -195,10 +198,7 @@ async def transfer(
         transaction.status = TransactionStateMachine.transition(transaction.status, "FAILED")
         transaction.failure_reason = "Receiver wallet not found"
         await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Receiver wallet not found",
-        )
+        raise WalletNotFoundError("Receiver wallet not found")
 
     sender_wallet, receiver_wallet = await lock_wallets_in_order(
         db, sender_wallet.id, receiver_wallet.id
@@ -220,10 +220,7 @@ async def transfer(
         transaction.status = TransactionStateMachine.transition(transaction.status, "FAILED")
         transaction.failure_reason = "Insufficient funds"
         await db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Insufficient funds",
-        )
+        raise InsufficientFundsError()
 
     sender_wallet.balance -= payload.amount
     receiver_wallet.balance += payload.amount

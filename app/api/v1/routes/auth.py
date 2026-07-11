@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.exceptions import EmailAlreadyRegisteredError
 from app.models.user import User
 from app.models.wallet import Wallet
 from app.schemas.user import UserCreate, UserOut
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)):
     existing = await db.execute(select(User).where(User.email == payload.email))
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+        raise EmailAlreadyRegisteredError()
 
     user = User(
         email=payload.email,
