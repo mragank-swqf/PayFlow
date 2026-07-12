@@ -1,0 +1,16 @@
+venv/
+.venv/
+.env
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.git/
+.gitignore
+.pytest_cache/
+.mypy_cache/
+.cursor/
+.cursor-rules
+*.md
+LICENSE
+pytest.ini
+tests/
